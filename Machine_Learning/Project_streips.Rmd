@@ -1,0 +1,127 @@
+---
+title: "Practical Machine Learning Project"
+author: "Marcus A. Streips"
+date: "February 13, 2015"
+output: html_document
+---
+
+##Background##
+Six participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways (A,B,C,D and E). Accelerometer measurements were taken on the belt, forearm, arm, and dumbell. The goal of this project is to use the data gathered from the experiment to predict  the manner in which the six participants did the exercise. A random forest model is proposed, tested and used to predict the activities using a testing data set with the activity ("classe" variable) redacted. The results are presented. 
+
+More information is available from the website <http://groupware.les.inf.puc-rio.br/har>.
+
+###Load libraries, set seed, and activate parallel processing###
+```{r, warning=FALSE, message=FALSE}
+library(caret)
+library(RANN)
+library(dplyr)
+setwd("~/Google Drive/Coursera/Machine Learning/Project")
+set.seed(383838)
+
+#parallel processing
+library(doMC)
+registerDoMC(cores = 4)
+```
+
+###Import Testing and Training Data###
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+training <- read.csv("pml-training.csv", header=TRUE, 
+                     na.strings=c("", " ","#DIV/0!")) 
+testing <- read.csv("pml-testing.csv", header=TRUE, na.strings=c("", " ", "#DIV/0!"))
+```
+
+##Pre-Processing##
+An extensive effort was made to preprocess the data to optimize the model to include:
+
+* Imputation
+* Eliminating Near Zero Value Variables
+* PCA
+* Removing Highly Correlated Predictors
+* Standardizing Data with Center and Scale
+
+It was determined that these pre-processing steps were unneccesary to develop a highly accurate model and so they are not presented here. 
+  
+Data that was not continuous was removed as well as all variables lacking data in the testing data set. 
+
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+#Remove Unnessary fields and fields with all NAs
+new_names <- sapply(testing[,1:160], mean)
+na_fields <- as.data.frame(new_names, row.names=NULL)
+na_fields$names <- rownames(na_fields)
+fields <- filter(na_fields, new_names != "NA")
+new_fields <- as.vector(fields[,2])
+new_fields_sm <- new_fields[5:56]
+
+new_testing <- testing[new_fields_sm]
+new_training <- training[new_fields_sm]
+
+#format all data as numeric
+new_testing <- as.data.frame(lapply(new_testing, as.numeric))
+new_training <- as.data.frame(lapply(new_training, as.numeric))
+
+#add back classe to training
+new_training$classe <- training$classe
+```
+
+##Partitioning##
+The training data was partitioned so it could be used to build a prediction model. 
+```{r, cache=TRUE}
+inTrain <- createDataPartition(y=new_training$classe, p=0.75, list=FALSE)
+train <- new_training[inTrain,]
+test <- new_training[-inTrain,]
+```
+
+##Cross-Validation##
+A k-fold cross validation with k=3 was chosen over bootstrapping because it was less computationally demanding.  Three folds were sufficient do cross validate a highly accurate rf model. A smaller k has more bias, but less variance. 
+```{r, cache=TRUE}
+#crossValidation 
+train_control <- trainControl(method="cv", number=3) 
+```
+
+##Training the Model##
+A random forest was chosen for the model because it is one of the most accurate models in Kaggle competitions and incorporates its own internal cross-validation. It performed better than the following models which are not presented here:
+
+* rpart
+* naive bayes 
+* gradient boosing machine
+
+```{r, cache=TRUE, message=FALSE}
+# train the model 
+model <- train(classe~., data=train, trControl=train_control, method="rf")  
+```
+
+##Predict from the Model##
+The random forest model is used to run predictions on the training partition and testing partition.  Using the `confusionMatrix` function from the `caret` package we are able to determine our model's accuracy. 
+```{r, cache=TRUE}
+#predict on training partion 
+predict <- predict(model,train)
+confusionMatrix(predict, train$classe)
+
+#predict on testing partition
+predict2 <- predict(model, test)
+confusionMatrix(predict2, test$classe)
+```
+
+##Expectation for Out-of-Sample Error##
+```{r}
+#error rate
+missClass = function(values, prediction) {
+        sum(prediction != values)/length(values)
+}
+errRate = missClass(test$classe, predict2) #same as 1-0.9929
+errRate
+```
+
+##Estimating Error with Cross-Validation##
+Using the K(3)-folds cross validation we see the resampling results across the tuning parameters and the corresponding accuracies, the inverse of which would be the errors. 
+```{r}
+model
+```
+
+##Analyzing Model##
+Using the `varImp` function of the `caret` package we can review our model to determine which variable were the most important in making our predicitions with an accuracy of 99.29%.
+```{r, fig.height=8, message=FALSE}
+#plotting importance of variables
+varImpObj <- varImp(model)
+plot(varImpObj)
+```
